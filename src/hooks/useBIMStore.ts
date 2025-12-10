@@ -69,8 +69,13 @@ export function useBIMStore() {
     };
   }, [user]);
 
-  // Fetch audit results
+  // Fetch audit results (only when authenticated)
   useEffect(() => {
+    if (!user) {
+      setAuditResults([]);
+      return;
+    }
+
     const fetchResults = async () => {
       const { data, error } = await supabase
         .from("audit_results")
@@ -83,7 +88,7 @@ export function useBIMStore() {
     };
 
     fetchResults();
-  }, []);
+  }, [user]);
 
   const addBCFTopic = async (title: string, elementId: string | null) => {
     if (!user) return false;
@@ -129,19 +134,19 @@ export function useBIMStore() {
   };
 
   const runAudit = async () => {
-    if (!idsFile) return;
+    if (!idsFile || !user) return;
     
     setIsLoading(true);
 
-    // Clear previous results
+    // Clear previous results for this user
     await supabase.from("audit_results").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
     // Simulate audit based on loaded IDS file
-    const results: Omit<AuditResult, "id" | "created_at">[] = [
-      { element_id: "1F4a", status: "PASS", message: `Conforme à ${idsFile.name} (Règle Mur)`, rule_name: idsFile.name },
-      { element_id: "2D8x", status: "PASS", message: `Conforme à ${idsFile.name} (Règle Dalle)`, rule_name: idsFile.name },
-      { element_id: "9H2k", status: "FAIL", message: "Propriété 'AcousticRating' manquante (Règle Fenêtre)", rule_name: idsFile.name },
-      { element_id: "4J5m", status: "WARNING", message: "Code GID (22.10) à vérifier", rule_name: idsFile.name },
+    const results = [
+      { element_id: "1F4a", status: "PASS", message: `Conforme à ${idsFile.name} (Règle Mur)`, rule_name: idsFile.name, user_id: user.id },
+      { element_id: "2D8x", status: "PASS", message: `Conforme à ${idsFile.name} (Règle Dalle)`, rule_name: idsFile.name, user_id: user.id },
+      { element_id: "9H2k", status: "FAIL", message: "Propriété 'AcousticRating' manquante (Règle Fenêtre)", rule_name: idsFile.name, user_id: user.id },
+      { element_id: "4J5m", status: "WARNING", message: "Code GID (22.10) à vérifier", rule_name: idsFile.name, user_id: user.id },
     ];
 
     const { data, error } = await supabase
