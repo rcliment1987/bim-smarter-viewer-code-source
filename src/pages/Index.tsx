@@ -1,10 +1,11 @@
+import { useRef, useState } from "react";
 import { Layers } from "lucide-react";
 import { toast } from "sonner";
 import { useBIMStore } from "@/hooks/useBIMStore";
 import { Sidebar } from "@/components/bim/Sidebar";
 import { Toolbar } from "@/components/bim/Toolbar";
 import { StatusBar } from "@/components/bim/StatusBar";
-import { ThreeViewer } from "@/components/bim/ThreeViewer";
+import { IFCViewer } from "@/components/bim/IFCViewer";
 import { PropertiesPanel } from "@/components/bim/PropertiesPanel";
 import { BCFPanel } from "@/components/bim/BCFPanel";
 import { AuditPanel } from "@/components/bim/AuditPanel";
@@ -28,8 +29,31 @@ export default function Index() {
     exportToCSV,
   } = useBIMStore();
 
+  // IFC file state
+  const [ifcFileUrl, setIfcFileUrl] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string>("Projet_Demo.ifc");
+  const ifcInputRef = useRef<HTMLInputElement>(null);
+
   const handleOpenFile = () => {
-    toast.info("Module chargement IFC (WASM) désactivé en mode démo.");
+    ifcInputRef.current?.click();
+  };
+
+  const handleIfcUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setFileName(file.name);
+      const url = URL.createObjectURL(file);
+      setIfcFileUrl(url);
+      setSelection(null);
+    }
+    // Reset input
+    if (ifcInputRef.current) {
+      ifcInputRef.current.value = "";
+    }
+  };
+
+  const handleNotification = (msg: string) => {
+    toast.info(msg);
   };
 
   const handleExport = () => {
@@ -55,6 +79,15 @@ export default function Index() {
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground overflow-hidden">
+      {/* Hidden IFC file input */}
+      <input
+        type="file"
+        ref={ifcInputRef}
+        onChange={handleIfcUpload}
+        accept=".ifc"
+        className="hidden"
+      />
+
       {/* Left Sidebar */}
       <Sidebar
         activePanel={activePanel}
@@ -64,8 +97,13 @@ export default function Index() {
 
       {/* Center: 3D Viewport */}
       <div className="flex-grow relative bg-secondary">
-        <Toolbar onExport={handleExport} />
-        <ThreeViewer selectedId={selection} onSelect={setSelection} />
+        <Toolbar onExport={handleExport} fileName={fileName} ifcLoaded={!!ifcFileUrl} />
+        <IFCViewer
+          ifcFileUrl={ifcFileUrl}
+          selectedId={selection}
+          onSelect={setSelection}
+          onNotification={handleNotification}
+        />
         <StatusBar selection={selection} />
       </div>
 
