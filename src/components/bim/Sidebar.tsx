@@ -52,8 +52,16 @@ function NavButton({ icon, title, active, onClick }: NavButtonProps) {
 export function Sidebar({ activePanel, onPanelChange, onOpenFile }: SidebarProps) {
   return (
     <div className="w-16 flex flex-col items-center py-4 bg-background border-r border-border z-10">
-      <div className="mb-6 font-bold text-xl text-primary tracking-tighter">
-        BIM
+      {/* BRANDING BIMsmarter */}
+      <div className="mb-8 flex flex-col items-center justify-center cursor-default select-none">
+        {/* BIM: Dark Blue #0E2C50 */}
+        <div className="text-2xl font-black tracking-[0.2em] text-[#0E2C50] leading-none" style={{ marginLeft: '0.2em' }}>
+          BIM
+        </div>
+        {/* SMARTER: Grey #6C6A6B */}
+        <div className="text-[0.6rem] font-bold text-[#6C6A6B] uppercase tracking-widest w-full text-center leading-none mt-1">
+          SMARTER
+        </div>
       </div>
 
       <NavButton
