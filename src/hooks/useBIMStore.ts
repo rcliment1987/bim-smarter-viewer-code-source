@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MOCK_ELEMENTS } from "@/data/mockElements";
 import type { PanelType, BCFTopic, AuditResult, IDSFile } from "@/types/bim";
+import type { User } from "@supabase/supabase-js";
 
 export function useBIMStore() {
   const [activePanel, setActivePanel] = useState<PanelType>("properties");
@@ -10,13 +11,34 @@ export function useBIMStore() {
   const [auditResults, setAuditResults] = useState<AuditResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [idsFile, setIdsFile] = useState<IDSFile | null>(null);
+  const [user, setUser] = useState<User | null>(null);
 
   const selectedElement = useMemo(() => {
     return MOCK_ELEMENTS.find((el) => el.id === selection) || null;
   }, [selection]);
 
-  // Fetch BCF topics
+  // Auth state management
   useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setUser(session?.user ?? null);
+      }
+    );
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Fetch BCF topics (only when authenticated)
+  useEffect(() => {
+    if (!user) {
+      setBcfTopics([]);
+      return;
+    }
+
     const fetchTopics = async () => {
       const { data, error } = await supabase
         .from("bcf_topics")
@@ -45,7 +67,7 @@ export function useBIMStore() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user]);
 
   // Fetch audit results
   useEffect(() => {
@@ -64,12 +86,15 @@ export function useBIMStore() {
   }, []);
 
   const addBCFTopic = async (title: string, elementId: string | null) => {
+    if (!user) return false;
+
     const { error } = await supabase.from("bcf_topics").insert({
       title,
       element_id: elementId,
       status: "Open",
       priority: "Medium",
       assignee: "À définir",
+      user_id: user.id,
     });
 
     return !error;
@@ -162,6 +187,7 @@ export function useBIMStore() {
     auditResults,
     isLoading,
     idsFile,
+    user,
     addBCFTopic,
     loadIDSFile,
     clearIDSFile,
