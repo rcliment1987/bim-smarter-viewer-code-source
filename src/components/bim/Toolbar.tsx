@@ -5,6 +5,8 @@ import { toast } from "sonner";
 
 interface ToolbarProps {
   onExport: () => void;
+  fileName?: string;
+  ifcLoaded?: boolean;
 }
 
 interface ToolButtonProps {
@@ -28,16 +30,22 @@ function ToolButton({ icon, label, onClick, highlight }: ToolButtonProps) {
   );
 }
 
-export function Toolbar({ onExport }: ToolbarProps) {
+export function Toolbar({ onExport, fileName = "Projet_Demo.ifc", ifcLoaded = false }: ToolbarProps) {
   return (
     <div className="absolute top-4 left-4 right-4 h-12 glass-panel rounded-lg flex items-center px-4 justify-between z-10 shadow-lg text-sm border border-border">
       <div className="flex items-center gap-4">
         <span className="font-semibold text-foreground">
-          Projet: Residence_Lux_A.ifc
+          Projet: {fileName}
         </span>
-        <Badge variant="outline" className="bg-[hsl(var(--bim-success))]/20 text-[hsl(142,76%,60%)] border-[hsl(var(--bim-success))]/50">
-          IFC4
-        </Badge>
+        {ifcLoaded ? (
+          <Badge variant="outline" className="bg-blue-900/30 text-blue-300 border-blue-700">
+            IFC Chargé
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="bg-[hsl(var(--bim-success))]/20 text-[hsl(142,76%,60%)] border-[hsl(var(--bim-success))]/50">
+            Demo
+          </Badge>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <ToolButton
