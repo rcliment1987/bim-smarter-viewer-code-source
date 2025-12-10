@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { IFCLoader } from "web-ifc-three";
-import { IFCWALLSTANDARDCASE, IFCSLAB, IFCWINDOW, IFCCOLUMN } from "web-ifc";
+import * as WebIFC from "web-ifc";
 
 interface IFCViewerProps {
   ifcFileUrl: string | null;
@@ -24,16 +23,16 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const ifcLoaderRef = useRef<IFCLoader | null>(null);
+  const ifcApiRef = useRef<WebIFC.IfcAPI | null>(null);
   const modelRef = useRef<THREE.Object3D | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const mockGroupRef = useRef<THREE.Group | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
   const [isLoading, setIsLoading] = useState(false);
-  const [loaderReady, setLoaderReady] = useState(false);
+  const [apiReady, setApiReady] = useState(false);
 
-  // Initialize Three.js scene
+  // Initialize Three.js scene and web-ifc
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -77,21 +76,22 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
     dirLight.position.set(10, 20, 10);
     scene.add(dirLight);
 
-    // Setup IFC Loader asynchronously
-    const initLoader = async () => {
+    // Initialize web-ifc API
+    const initWebIFC = async () => {
       try {
-        const ifcLoader = new IFCLoader();
-        // Set WASM path with trailing slash
-        await ifcLoader.ifcManager.setWasmPath("https://unpkg.com/web-ifc@0.0.46/");
-        ifcLoaderRef.current = ifcLoader;
-        setLoaderReady(true);
-        console.log("IFC Loader WASM initialized");
+        const ifcApi = new WebIFC.IfcAPI();
+        ifcApi.SetWasmPath("https://unpkg.com/web-ifc@0.0.46/", true);
+        await ifcApi.Init();
+        ifcApiRef.current = ifcApi;
+        setApiReady(true);
+        console.log("web-ifc WASM initialized successfully");
+        onNotification?.("Moteur IFC prêt");
       } catch (error) {
-        console.error("Failed to initialize IFC Loader:", error);
-        onNotification?.("Erreur: Impossible d'initialiser le chargeur IFC");
+        console.error("Failed to initialize web-ifc:", error);
+        onNotification?.("Erreur: Impossible d'initialiser le moteur IFC");
       }
     };
-    initLoader();
+    initWebIFC();
 
     // Add mock data initially
     addMockData(scene);
@@ -171,22 +171,11 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
     if (intersects.length > 0) {
       const hit = intersects[0];
       
-      // Check if it's a real IFC model
-      if (modelRef.current && ifcLoaderRef.current) {
-        try {
-          const faceIndex = hit.faceIndex;
-          const geometry = (hit.object as THREE.Mesh).geometry;
-          if (faceIndex !== undefined && geometry) {
-            const expressId = ifcLoaderRef.current.ifcManager.getExpressId(geometry, faceIndex);
-            if (expressId !== undefined) {
-              onSelect(String(expressId));
-              onNotification?.(`Élément IFC sélectionné : Express ID ${expressId}`);
-              return;
-            }
-          }
-        } catch (e) {
-          // Fall through to mock handling
-        }
+      // Check if it's from IFC model (has expressID in userData)
+      if (hit.object.userData?.expressID !== undefined) {
+        onSelect(String(hit.object.userData.expressID));
+        onNotification?.(`Élément IFC sélectionné : Express ID ${hit.object.userData.expressID}`);
+        return;
       }
 
       // Mock element handling
@@ -211,38 +200,114 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
     return () => element.removeEventListener("dblclick", handleDoubleClick);
   }, [handleDoubleClick]);
 
-  // Load IFC file when URL changes and loader is ready
+  // Load IFC file when URL changes and API is ready
   useEffect(() => {
-    if (!ifcFileUrl || !loaderReady || !ifcLoaderRef.current || !sceneRef.current) return;
+    if (!ifcFileUrl || !apiReady || !ifcApiRef.current || !sceneRef.current) return;
 
     const scene = sceneRef.current;
-    const ifcLoader = ifcLoaderRef.current;
+    const ifcApi = ifcApiRef.current;
 
-    setIsLoading(true);
-    onNotification?.("Chargement et parsing de l'IFC en cours...");
+    const loadIFC = async () => {
+      setIsLoading(true);
+      onNotification?.("Chargement du fichier IFC...");
 
-    // Remove mock data
-    if (mockGroupRef.current) {
-      scene.remove(mockGroupRef.current);
-      mockGroupRef.current = null;
-    }
+      // Remove mock data
+      if (mockGroupRef.current) {
+        scene.remove(mockGroupRef.current);
+        mockGroupRef.current = null;
+      }
 
-    // Remove previous model
-    if (modelRef.current) {
-      scene.remove(modelRef.current);
-      modelRef.current = null;
-    }
+      // Remove previous model
+      if (modelRef.current) {
+        scene.remove(modelRef.current);
+        modelRef.current = null;
+      }
 
-    ifcLoader.load(
-      ifcFileUrl,
-      (ifcModel) => {
-        modelRef.current = ifcModel;
-        scene.add(ifcModel);
+      try {
+        // Fetch the IFC file
+        const response = await fetch(ifcFileUrl);
+        if (!response.ok) throw new Error("Failed to fetch IFC file");
+        
+        const data = await response.arrayBuffer();
+        const uint8Array = new Uint8Array(data);
+        
+        onNotification?.("Parsing du fichier IFC...");
+        
+        // Load into web-ifc
+        const modelID = ifcApi.OpenModel(uint8Array);
+        
+        // Create a group to hold all meshes
+        const ifcGroup = new THREE.Group();
+        ifcGroup.name = "IFCModel";
+        
+        // Get all geometry
+        const flatMeshes = ifcApi.LoadAllGeometry(modelID);
+        
+        for (let i = 0; i < flatMeshes.size(); i++) {
+          const flatMesh = flatMeshes.get(i);
+          const placedGeometries = flatMesh.geometries;
+          
+          for (let j = 0; j < placedGeometries.size(); j++) {
+            const placedGeometry = placedGeometries.get(j);
+            const geometry = ifcApi.GetGeometry(modelID, placedGeometry.geometryExpressID);
+            
+            const verts = ifcApi.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
+            const indices = ifcApi.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
+            
+            if (verts.length === 0 || indices.length === 0) continue;
+            
+            const bufferGeometry = new THREE.BufferGeometry();
+            
+            // Create position attribute (every 6 floats: x,y,z, nx,ny,nz)
+            const posFloats = new Float32Array(verts.length / 2);
+            const normFloats = new Float32Array(verts.length / 2);
+            
+            for (let k = 0; k < verts.length; k += 6) {
+              posFloats[k / 2] = verts[k];
+              posFloats[k / 2 + 1] = verts[k + 1];
+              posFloats[k / 2 + 2] = verts[k + 2];
+              normFloats[k / 2] = verts[k + 3];
+              normFloats[k / 2 + 1] = verts[k + 4];
+              normFloats[k / 2 + 2] = verts[k + 5];
+            }
+            
+            bufferGeometry.setAttribute("position", new THREE.BufferAttribute(posFloats, 3));
+            bufferGeometry.setAttribute("normal", new THREE.BufferAttribute(normFloats, 3));
+            bufferGeometry.setIndex(Array.from(indices));
+            
+            // Get color from placed geometry
+            const color = placedGeometry.color;
+            const material = new THREE.MeshLambertMaterial({
+              color: new THREE.Color(color.x, color.y, color.z),
+              transparent: color.w < 1,
+              opacity: color.w,
+              side: THREE.DoubleSide
+            });
+            
+            const mesh = new THREE.Mesh(bufferGeometry, material);
+            
+            // Apply transformation matrix
+            const matrix = new THREE.Matrix4();
+            matrix.fromArray(placedGeometry.flatTransformation);
+            mesh.applyMatrix4(matrix);
+            
+            mesh.userData.expressID = flatMesh.expressID;
+            ifcGroup.add(mesh);
+            
+            ifcGroup.add(mesh);
+          }
+        }
+        
+        ifcApi.CloseModel(modelID);
+        
+        scene.add(ifcGroup);
+        modelRef.current = ifcGroup;
+        
         setIsLoading(false);
-        onNotification?.("Fichier IFC chargé avec succès !");
+        onNotification?.(`Fichier IFC chargé ! (${ifcGroup.children.length} objets)`);
         
         // Center camera on model
-        const box = new THREE.Box3().setFromObject(ifcModel);
+        const box = new THREE.Box3().setFromObject(ifcGroup);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
@@ -256,22 +321,16 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
           controlsRef.current.target.copy(center);
           controlsRef.current.update();
         }
-      },
-      (progress) => {
-        if (progress.total > 0) {
-          const percent = Math.round((progress.loaded / progress.total) * 100);
-          onNotification?.(`Chargement: ${percent}%`);
-        }
-      },
-      (error) => {
+      } catch (error) {
         console.error("IFC Load Error:", error);
         setIsLoading(false);
-        onNotification?.("Erreur lors du chargement de l'IFC.");
-        // Re-add mock data on error
+        onNotification?.(`Erreur: ${error instanceof Error ? error.message : "Échec du chargement"}`);
         addMockData(scene);
       }
-    );
-  }, [ifcFileUrl, loaderReady, onNotification]);
+    };
+
+    loadIFC();
+  }, [ifcFileUrl, apiReady, onNotification]);
 
   // Update selection highlighting
   useEffect(() => {
