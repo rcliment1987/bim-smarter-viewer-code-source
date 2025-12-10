@@ -33,3 +33,8 @@ export interface AuditResult {
 }
 
 export type PanelType = 'properties' | 'bcf' | 'ids' | 'tree' | 'settings';
+
+export interface IDSFile {
+  name: string;
+  ruleCount: number;
+}

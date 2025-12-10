@@ -1,36 +1,104 @@
-import { ShieldCheck, Play, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { useRef } from "react";
+import { ShieldCheck, Play, CheckCircle, XCircle, AlertTriangle, UploadCloud, FileCode } from "lucide-react";
 import { Panel } from "./Panel";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import type { AuditResult } from "@/types/bim";
+import type { AuditResult, IDSFile } from "@/types/bim";
 
 interface AuditPanelProps {
   results: AuditResult[];
   isLoading: boolean;
+  idsFile: IDSFile | null;
   onRunAudit: () => void;
+  onLoadIDS: (file: File) => Promise<IDSFile>;
+  onClearIDS: () => void;
 }
 
-export function AuditPanel({ results, isLoading, onRunAudit }: AuditPanelProps) {
+export function AuditPanel({ 
+  results, 
+  isLoading, 
+  idsFile, 
+  onRunAudit, 
+  onLoadIDS, 
+  onClearIDS 
+}: AuditPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleTriggerUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    await onLoadIDS(file);
+    
+    // Reset input to allow re-selecting same file
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
   return (
     <Panel title="Audit Qualité & GID" icon={ShieldCheck}>
       <div className="p-4 border-b border-border bg-secondary/30">
         <h3 className="text-sm font-semibold mb-2 text-primary">
           Règles actives
         </h3>
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox checked disabled className="data-[state=checked]:bg-primary" />
-            <span>CRTI-B GID (Luxembourg)</span>
+        
+        {/* Hidden file input */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileChange}
+          accept=".ids,.xml"
+          className="hidden"
+        />
+
+        {!idsFile ? (
+          // State 1: No file loaded
+          <div className="mb-4">
+            <div className="text-xs text-muted-foreground mb-2">Aucun standard chargé.</div>
+            <Button
+              variant="outline"
+              onClick={handleTriggerUpload}
+              className="w-full border-dashed"
+            >
+              <UploadCloud className="w-4 h-4 mr-2" />
+              Charger un fichier .IDS
+            </Button>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox checked disabled className="data-[state=checked]:bg-primary" />
-            <span>ISO 19650 Naming</span>
+        ) : (
+          // State 2: File loaded
+          <div className="mb-4 bg-secondary p-3 rounded border border-primary/30">
+            <div className="flex justify-between items-start mb-1">
+              <span className="text-xs font-bold text-foreground truncate max-w-[150px]" title={idsFile.name}>
+                {idsFile.name}
+              </span>
+              <span className="text-[10px] bg-primary/20 text-primary px-1.5 rounded font-medium">
+                ACTIF
+              </span>
+            </div>
+            <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <FileCode className="w-3 h-3" />
+              {idsFile.ruleCount > 0 
+                ? `${idsFile.ruleCount} spécifications détectées` 
+                : "Format standard détecté"}
+            </div>
+            <button
+              onClick={onClearIDS}
+              className="mt-2 text-[10px] text-destructive hover:underline"
+            >
+              Changer de fichier
+            </button>
           </div>
-        </div>
+        )}
+
         <Button
           onClick={onRunAudit}
-          disabled={isLoading}
-          className="mt-4 w-full bg-[hsl(260,70%,50%)] hover:bg-[hsl(260,70%,45%)]"
+          disabled={isLoading || !idsFile}
+          className="w-full"
+          variant={idsFile ? "default" : "secondary"}
         >
           <Play className="w-4 h-4 mr-2" />
           {isLoading ? "Analyse en cours..." : "Lancer l'Audit"}
@@ -64,8 +132,10 @@ export function AuditPanel({ results, isLoading, onRunAudit }: AuditPanelProps) 
             ))}
           </div>
         ) : (
-          <div className="text-center text-muted-foreground text-xs mt-10">
-            Aucun résultat d'audit.
+          <div className="text-center text-muted-foreground text-xs mt-10 px-4">
+            {idsFile 
+              ? "Prêt à auditer la maquette selon les règles du fichier chargé."
+              : "Chargez un fichier IDS (XML) pour commencer l'analyse."}
           </div>
         )}
       </div>

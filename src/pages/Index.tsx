@@ -20,7 +20,10 @@ export default function Index() {
     bcfTopics,
     auditResults,
     isLoading,
+    idsFile,
     addBCFTopic,
+    loadIDSFile,
+    clearIDSFile,
     runAudit,
     exportToCSV,
   } = useBIMStore();
@@ -35,9 +38,19 @@ export default function Index() {
   };
 
   const handleRunAudit = async () => {
-    toast.info("Analyse IDS (Luxembourg CRTI-B) en cours...");
+    if (!idsFile) {
+      toast.error("Veuillez d'abord charger un fichier IDS.");
+      return;
+    }
+    toast.info(`Analyse selon "${idsFile.name}" en cours...`);
     await runAudit();
     toast.success("Audit GID terminé.");
+  };
+
+  const handleLoadIDS = async (file: File) => {
+    const result = await loadIDSFile(file);
+    toast.success(`Fichier IDS chargé : ${result.name}`);
+    return result;
   };
 
   return (
@@ -74,7 +87,10 @@ export default function Index() {
           <AuditPanel
             results={auditResults}
             isLoading={isLoading}
+            idsFile={idsFile}
             onRunAudit={handleRunAudit}
+            onLoadIDS={handleLoadIDS}
+            onClearIDS={clearIDSFile}
           />
         )}
 

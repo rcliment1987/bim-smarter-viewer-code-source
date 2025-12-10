@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MOCK_ELEMENTS } from "@/data/mockElements";
-import type { PanelType, BCFTopic, AuditResult, BIMElement } from "@/types/bim";
+import type { PanelType, BCFTopic, AuditResult, IDSFile } from "@/types/bim";
 
 export function useBIMStore() {
   const [activePanel, setActivePanel] = useState<PanelType>("properties");
@@ -9,6 +9,7 @@ export function useBIMStore() {
   const [bcfTopics, setBcfTopics] = useState<BCFTopic[]>([]);
   const [auditResults, setAuditResults] = useState<AuditResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [idsFile, setIdsFile] = useState<IDSFile | null>(null);
 
   const selectedElement = useMemo(() => {
     return MOCK_ELEMENTS.find((el) => el.id === selection) || null;
@@ -74,18 +75,48 @@ export function useBIMStore() {
     return !error;
   };
 
+  const loadIDSFile = (file: File): Promise<IDSFile> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        // Parse IDS XML to count specifications
+        const matches = content.match(/specification/gi);
+        const count = matches ? Math.ceil(matches.length / 2) : 0;
+        
+        const idsData: IDSFile = {
+          name: file.name,
+          ruleCount: count,
+        };
+        
+        setIdsFile(idsData);
+        setAuditResults([]); // Reset results when new file loaded
+        resolve(idsData);
+      };
+      reader.onerror = () => reject(new Error("Erreur de lecture du fichier"));
+      reader.readAsText(file);
+    });
+  };
+
+  const clearIDSFile = () => {
+    setIdsFile(null);
+    setAuditResults([]);
+  };
+
   const runAudit = async () => {
+    if (!idsFile) return;
+    
     setIsLoading(true);
 
     // Clear previous results
     await supabase.from("audit_results").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
-    // Simulate audit
+    // Simulate audit based on loaded IDS file
     const results: Omit<AuditResult, "id" | "created_at">[] = [
-      { element_id: "1F4a", status: "PASS", message: "Code GID présent (21.12)", rule_name: "CRTI-B GID" },
-      { element_id: "2D8x", status: "PASS", message: "Code GID présent (23.01)", rule_name: "CRTI-B GID" },
-      { element_id: "9H2k", status: "FAIL", message: "Propriété 'AcousticRating' manquante pour chassis ext.", rule_name: "ISO 19650" },
-      { element_id: "4J5m", status: "WARNING", message: "Code GID (22.10) à vérifier avec Pset_Concrete", rule_name: "CRTI-B GID" },
+      { element_id: "1F4a", status: "PASS", message: `Conforme à ${idsFile.name} (Règle Mur)`, rule_name: idsFile.name },
+      { element_id: "2D8x", status: "PASS", message: `Conforme à ${idsFile.name} (Règle Dalle)`, rule_name: idsFile.name },
+      { element_id: "9H2k", status: "FAIL", message: "Propriété 'AcousticRating' manquante (Règle Fenêtre)", rule_name: idsFile.name },
+      { element_id: "4J5m", status: "WARNING", message: "Code GID (22.10) à vérifier", rule_name: idsFile.name },
     ];
 
     const { data, error } = await supabase
@@ -130,7 +161,10 @@ export function useBIMStore() {
     bcfTopics,
     auditResults,
     isLoading,
+    idsFile,
     addBCFTopic,
+    loadIDSFile,
+    clearIDSFile,
     runAudit,
     exportToCSV,
   };
