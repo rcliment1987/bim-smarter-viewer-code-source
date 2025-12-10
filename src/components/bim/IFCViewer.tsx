@@ -31,6 +31,7 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
   const [isLoading, setIsLoading] = useState(false);
+  const [loaderReady, setLoaderReady] = useState(false);
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -76,10 +77,21 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
     dirLight.position.set(10, 20, 10);
     scene.add(dirLight);
 
-    // Setup IFC Loader
-    const ifcLoader = new IFCLoader();
-    ifcLoader.ifcManager.setWasmPath("https://unpkg.com/web-ifc@0.0.46/");
-    ifcLoaderRef.current = ifcLoader;
+    // Setup IFC Loader asynchronously
+    const initLoader = async () => {
+      try {
+        const ifcLoader = new IFCLoader();
+        // Set WASM path with trailing slash
+        await ifcLoader.ifcManager.setWasmPath("https://unpkg.com/web-ifc@0.0.46/");
+        ifcLoaderRef.current = ifcLoader;
+        setLoaderReady(true);
+        console.log("IFC Loader WASM initialized");
+      } catch (error) {
+        console.error("Failed to initialize IFC Loader:", error);
+        onNotification?.("Erreur: Impossible d'initialiser le chargeur IFC");
+      }
+    };
+    initLoader();
 
     // Add mock data initially
     addMockData(scene);
@@ -110,7 +122,7 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
       renderer.dispose();
       controls.dispose();
     };
-  }, []);
+  }, [onNotification]);
 
   // Add mock elements to scene
   const addMockData = (scene: THREE.Scene) => {
@@ -199,9 +211,9 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
     return () => element.removeEventListener("dblclick", handleDoubleClick);
   }, [handleDoubleClick]);
 
-  // Load IFC file when URL changes
+  // Load IFC file when URL changes and loader is ready
   useEffect(() => {
-    if (!ifcFileUrl || !ifcLoaderRef.current || !sceneRef.current) return;
+    if (!ifcFileUrl || !loaderReady || !ifcLoaderRef.current || !sceneRef.current) return;
 
     const scene = sceneRef.current;
     const ifcLoader = ifcLoaderRef.current;
@@ -246,7 +258,10 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
         }
       },
       (progress) => {
-        // Progress callback
+        if (progress.total > 0) {
+          const percent = Math.round((progress.loaded / progress.total) * 100);
+          onNotification?.(`Chargement: ${percent}%`);
+        }
       },
       (error) => {
         console.error("IFC Load Error:", error);
@@ -256,7 +271,7 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
         addMockData(scene);
       }
     );
-  }, [ifcFileUrl, onNotification]);
+  }, [ifcFileUrl, loaderReady, onNotification]);
 
   // Update selection highlighting
   useEffect(() => {
