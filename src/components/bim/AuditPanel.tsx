@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { ShieldCheck, Play, CheckCircle, XCircle, AlertTriangle, UploadCloud, FileCode } from "lucide-react";
-import { Panel } from "./Panel";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import type { AuditResult, IDSFile } from "@/types/bim";
 
 interface AuditPanelProps {
@@ -23,10 +23,6 @@ export function AuditPanel({
 }: AuditPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleTriggerUpload = () => {
-    fileInputRef.current?.click();
-  };
-
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -40,83 +36,79 @@ export function AuditPanel({
   };
 
   return (
-    <Panel title="Audit Qualité & GID" icon={ShieldCheck}>
+    <div className="flex flex-col h-full">
+      {/* Header du Panneau */}
+      <div className="h-14 border-b border-border flex items-center px-4 gap-3 bg-secondary">
+        <ShieldCheck className="h-5 w-5 text-primary" />
+        <span className="font-bold tracking-wide">Audit Qualité & GID</span>
+      </div>
+
       <div className="p-4 border-b border-border bg-secondary/30">
-        <h3 className="text-sm font-semibold mb-2 text-primary">
-          Règles actives
-        </h3>
-        
-        {/* Hidden file input */}
-        <input
-          type="file"
+        <h3 className="text-sm font-semibold mb-3 text-foreground">Règles actives</h3>
+
+        {/* INPUT CACHÉ OBLIGATOIRE */}
+        <input 
+          type="file" 
           ref={fileInputRef}
           onChange={handleFileChange}
           accept=".ids,.xml"
-          className="hidden"
+          className="hidden" 
+          style={{ display: 'none' }}
         />
 
         {!idsFile ? (
-          // State 1: No file loaded
           <div className="mb-4">
             <div className="text-xs text-muted-foreground mb-2">Aucun standard chargé.</div>
-            <Button
-              variant="outline"
-              onClick={handleTriggerUpload}
-              className="w-full border-dashed"
+            {/* BOUTON QUI DÉCLENCHE L'UPLOAD */}
+            <Button 
+              variant="outline" 
+              className="w-full border-dashed flex gap-2 h-auto py-3"
+              onClick={() => fileInputRef.current?.click()}
             >
-              <UploadCloud className="w-4 h-4 mr-2" />
+              <UploadCloud className="h-4 w-4" />
               Charger un fichier .IDS
             </Button>
           </div>
         ) : (
-          // State 2: File loaded
-          <div className="mb-4 bg-secondary p-3 rounded border border-primary/30">
+          <div className="mb-4 bg-background p-3 rounded border border-primary/30">
             <div className="flex justify-between items-start mb-1">
-              <span className="text-xs font-bold text-foreground truncate max-w-[150px]" title={idsFile.name}>
-                {idsFile.name}
-              </span>
-              <span className="text-[10px] bg-primary/20 text-primary px-1.5 rounded font-medium">
-                ACTIF
-              </span>
+              <span className="text-xs font-bold truncate max-w-[150px]" title={idsFile.name}>{idsFile.name}</span>
+              <Badge className="text-[10px] h-5 bg-blue-900 text-blue-100 hover:bg-blue-800">ACTIF</Badge>
             </div>
             <div className="text-[10px] text-muted-foreground flex items-center gap-1">
-              <FileCode className="w-3 h-3" />
-              {idsFile.ruleCount > 0 
-                ? `${idsFile.ruleCount} spécifications détectées` 
-                : "Format standard détecté"}
+              <FileCode className="h-3 w-3" />
+              {idsFile.ruleCount || 0} spécifications détectées
             </div>
-            <button
-              onClick={onClearIDS}
-              className="mt-2 text-[10px] text-destructive hover:underline"
+            <button 
+              onClick={onClearIDS} 
+              className="mt-2 text-[10px] text-destructive hover:underline cursor-pointer"
             >
               Changer de fichier
             </button>
           </div>
         )}
 
-        <Button
+        <Button 
+          className="w-full gap-2" 
+          disabled={!idsFile || isLoading}
           onClick={onRunAudit}
-          disabled={isLoading || !idsFile}
-          className="w-full"
-          variant={idsFile ? "default" : "secondary"}
         >
-          <Play className="w-4 h-4 mr-2" />
+          <Play className="h-4 w-4" />
           {isLoading ? "Analyse en cours..." : "Lancer l'Audit"}
         </Button>
       </div>
-
+      
+      {/* Zone de résultats */}
       <div className="flex-1 overflow-y-auto p-2">
         {results.length > 0 ? (
           <div className="space-y-2">
             {results.map((res) => (
-              <div
-                key={res.id}
+              <div 
+                key={res.id} 
                 className={`p-2 rounded border text-xs flex gap-2 ${
-                  res.status === "PASS"
-                    ? "bg-[hsl(var(--bim-success))]/10 border-[hsl(var(--bim-success))]/50 text-[hsl(142,76%,60%)]"
-                    : res.status === "FAIL"
-                    ? "bg-[hsl(var(--bim-error))]/10 border-[hsl(var(--bim-error))]/50 text-[hsl(0,84%,70%)]"
-                    : "bg-[hsl(var(--bim-warning))]/10 border-[hsl(var(--bim-warning))]/50 text-[hsl(45,93%,60%)]"
+                  res.status === 'PASS' ? 'bg-green-900/20 border-green-800 text-green-200' :
+                  res.status === 'FAIL' ? 'bg-red-900/20 border-red-800 text-red-200' :
+                  'bg-yellow-900/20 border-yellow-800 text-yellow-200'
                 }`}
               >
                 <div className="mt-0.5">
@@ -133,12 +125,10 @@ export function AuditPanel({
           </div>
         ) : (
           <div className="text-center text-muted-foreground text-xs mt-10 px-4">
-            {idsFile 
-              ? "Prêt à auditer la maquette selon les règles du fichier chargé."
-              : "Chargez un fichier IDS (XML) pour commencer l'analyse."}
+            {idsFile ? "Prêt à auditer." : "En attente de fichier IDS."}
           </div>
         )}
       </div>
-    </Panel>
+    </div>
   );
 }
