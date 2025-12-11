@@ -294,7 +294,6 @@ export function IFCViewer({ ifcFileUrl, selectedId, onSelect, onNotification }: 
             mesh.userData.expressID = flatMesh.expressID;
             ifcGroup.add(mesh);
             
-            ifcGroup.add(mesh);
           }
         }
         
