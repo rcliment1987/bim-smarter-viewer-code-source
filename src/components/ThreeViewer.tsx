@@ -1,8 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { IFCLoader } from 'web-ifc-three/IFCLoader';
-import { IFCWALLSTANDARDCASE, IFCSLAB, IFCWINDOW, IFCDOOR, IFCCOLUMN } from 'web-ifc';
+import * as WebIFC from 'web-ifc';
 
 interface ThreeViewerProps {
   ifcFileUrl: string | null;
@@ -13,11 +12,35 @@ interface ThreeViewerProps {
 export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, setNotification }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
-  const ifcLoaderRef = useRef<IFCLoader | null>(null);
+  const ifcApiRef = useRef<WebIFC.IfcAPI | null>(null);
   const modelRef = useRef<THREE.Object3D | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const mockGroupRef = useRef<THREE.Group | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [apiReady, setApiReady] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("Chargement du modèle...");
+
+  // Add mock data function
+  const addMockData = useCallback((scene: THREE.Scene) => {
+    const group = new THREE.Group();
+    group.userData.isMock = true;
+    const mat = new THREE.MeshLambertMaterial({ color: 0x94a3b8 });
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    const m1 = new THREE.Mesh(box, mat); 
+    m1.position.set(0, 2, -5); 
+    m1.scale.set(10, 4, 0.5); 
+    m1.userData = { id: "MOCK1", isMock: true, originalColor: 0x94a3b8 };
+    const m2 = new THREE.Mesh(box, new THREE.MeshLambertMaterial({ color: 0x475569 })); 
+    m2.position.set(0, 0, 0); 
+    m2.scale.set(12, 0.5, 12); 
+    m2.userData = { id: "MOCK2", isMock: true, originalColor: 0x475569 };
+    group.add(m1, m2);
+    scene.add(group);
+    mockGroupRef.current = group;
+    return group;
+  }, []);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -45,6 +68,8 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     // CONTROLS
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controlsRef.current = controls;
 
     // LIGHTS
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -57,43 +82,55 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     const gridHelper = new THREE.GridHelper(50, 50, 0x888888, 0xcccccc);
     scene.add(gridHelper);
 
-    // IFC LOADER SETUP - Initialize async
-    const initIFCLoader = async () => {
+    // Initialize web-ifc API
+    const initWebIFC = async () => {
       try {
-        const ifcLoader = new IFCLoader();
-        await ifcLoader.ifcManager.setWasmPath('https://unpkg.com/web-ifc@0.0.46/');
-        ifcLoaderRef.current = ifcLoader;
-        console.log('IFC Loader initialized successfully');
+        const ifcApi = new WebIFC.IfcAPI();
+        // Use jsDelivr CDN which is more reliable
+        ifcApi.SetWasmPath("https://cdn.jsdelivr.net/npm/web-ifc@0.0.46/", true);
+        await ifcApi.Init();
+        ifcApiRef.current = ifcApi;
+        setApiReady(true);
+        console.log('web-ifc API initialized successfully');
       } catch (error) {
-        console.error('Failed to initialize IFC Loader:', error);
+        console.error('Failed to initialize web-ifc:', error);
+        setNotification("Erreur: Impossible d'initialiser le moteur IFC");
       }
     };
-    initIFCLoader();
+    initWebIFC();
 
-    // RAYCASTER
+    // Add mock data if no IFC file
+    addMockData(scene);
+
+    // RAYCASTER for selection
     const raycaster = new THREE.Raycaster();
-    (raycaster as any).firstHitOnly = true;
     const mouse = new THREE.Vector2();
 
-    const onMouseClick = async (event: MouseEvent) => {
+    const onMouseClick = (event: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
       
-      const objects = modelRef.current ? [modelRef.current] : scene.children.filter(c => c.userData.isMock);
-      const intersects = raycaster.intersectObjects(objects, true);
+      const objectsToTest: THREE.Object3D[] = [];
+      if (modelRef.current) {
+        objectsToTest.push(modelRef.current);
+      }
+      if (mockGroupRef.current) {
+        mockGroupRef.current.children.forEach(child => objectsToTest.push(child));
+      }
+
+      const intersects = raycaster.intersectObjects(objectsToTest, true);
 
       if (intersects.length > 0) {
         const hit = intersects[0];
-        if (modelRef.current && hit.faceIndex !== undefined && (hit.object as THREE.Mesh).geometry && ifcLoaderRef.current) {
-          const mesh = hit.object as THREE.Mesh;
-          const id = ifcLoaderRef.current.ifcManager.getExpressId(mesh.geometry as THREE.BufferGeometry, hit.faceIndex);
-          onSelect(id);
-          setNotification(`Élément IFC sélectionné : ID ${id}`);
-        } else {
+        if (hit.object.userData?.expressID !== undefined) {
+          onSelect(String(hit.object.userData.expressID));
+          setNotification(`Élément IFC sélectionné : ID ${hit.object.userData.expressID}`);
+        } else if (hit.object.userData?.id) {
           onSelect(hit.object.userData.id);
+          setNotification(`Élément sélectionné : ${hit.object.userData.id}`);
         }
       } else {
         onSelect(null);
@@ -102,34 +139,13 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     renderer.domElement.addEventListener('dblclick', onMouseClick);
 
     // ANIMATION
+    let animationId: number;
     const animate = () => {
-      requestAnimationFrame(animate);
+      animationId = requestAnimationFrame(animate);
       controls.update();
       renderer.render(scene, camera);
     };
     animate();
-
-    // MOCK DATA (Fallback) - affiché uniquement si pas de fichier IFC
-    const addMockData = () => {
-      const group = new THREE.Group();
-      group.userData.isMock = true;
-      const mat = new THREE.MeshLambertMaterial({ color: 0x94a3b8 });
-      const box = new THREE.BoxGeometry(1, 1, 1);
-      const m1 = new THREE.Mesh(box, mat); 
-      m1.position.set(0, 2, -5); 
-      m1.scale.set(10, 4, 0.5); 
-      m1.userData = { id: "MOCK1", isMock: true };
-      const m2 = new THREE.Mesh(box, new THREE.MeshLambertMaterial({ color: 0x475569 })); 
-      m2.position.set(0, 0, 0); 
-      m2.scale.set(12, 0.5, 12); 
-      m2.userData = { id: "MOCK2", isMock: true };
-      group.add(m1, m2);
-      scene.add(group);
-    };
-    
-    if (!ifcFileUrl) {
-      addMockData();
-    }
 
     const handleResize = () => {
       if (mountRef.current) {
@@ -143,88 +159,152 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     return () => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('dblclick', onMouseClick);
+      cancelAnimationFrame(animationId);
       renderer.dispose();
+      controls.dispose();
       if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
         mountRef.current.removeChild(renderer.domElement);
       }
     };
-  }, []);
+  }, [addMockData, onSelect, setNotification]);
 
   // LOAD IFC FILE EFFECT
   useEffect(() => {
+    if (!ifcFileUrl || !apiReady || !ifcApiRef.current || !sceneRef.current) return;
+
+    const scene = sceneRef.current;
+    const ifcApi = ifcApiRef.current;
+
     const loadIFC = async () => {
-      if (!ifcFileUrl || !sceneRef.current) return;
-      
-      // Attendre que le loader soit initialisé
-      let attempts = 0;
-      while (!ifcLoaderRef.current && attempts < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      
-      if (!ifcLoaderRef.current) {
-        setNotification("Erreur: IFC Loader non initialisé");
-        return;
+      setIsLoading(true);
+      setLoadingMessage("Téléchargement du fichier IFC...");
+      setNotification("Chargement du fichier IFC...");
+
+      // Remove mock data
+      if (mockGroupRef.current) {
+        scene.remove(mockGroupRef.current);
+        mockGroupRef.current = null;
       }
 
-      setIsLoading(true);
-      setNotification("Chargement du fichier IFC...");
-      
-      const scene = sceneRef.current;
-      
-      // Supprimer les anciens objets
-      const toRemove: THREE.Object3D[] = [];
-      scene.traverse(c => { 
-        if (c.userData.isMock || c === modelRef.current) toRemove.push(c); 
-      });
-      toRemove.forEach(c => scene.remove(c));
+      // Remove previous model
+      if (modelRef.current) {
+        scene.remove(modelRef.current);
+        modelRef.current = null;
+      }
 
       try {
-        ifcLoaderRef.current.load(
-          ifcFileUrl,
-          (ifcModel) => {
-            modelRef.current = ifcModel;
-            scene.add(ifcModel);
+        // Fetch the IFC file
+        const response = await fetch(ifcFileUrl);
+        if (!response.ok) throw new Error(`Échec du téléchargement: ${response.status}`);
+        
+        setLoadingMessage("Lecture du fichier...");
+        const data = await response.arrayBuffer();
+        const uint8Array = new Uint8Array(data);
+        
+        setLoadingMessage("Parsing du fichier IFC...");
+        setNotification("Parsing du fichier IFC...");
+        
+        // Load into web-ifc
+        const modelID = ifcApi.OpenModel(uint8Array);
+        
+        // Create a group to hold all meshes
+        const ifcGroup = new THREE.Group();
+        ifcGroup.name = "IFCModel";
+        
+        setLoadingMessage("Génération de la géométrie 3D...");
+        
+        // Get all geometry
+        const flatMeshes = ifcApi.LoadAllGeometry(modelID);
+        let meshCount = 0;
+        
+        for (let i = 0; i < flatMeshes.size(); i++) {
+          const flatMesh = flatMeshes.get(i);
+          const placedGeometries = flatMesh.geometries;
+          
+          for (let j = 0; j < placedGeometries.size(); j++) {
+            const placedGeometry = placedGeometries.get(j);
+            const geometry = ifcApi.GetGeometry(modelID, placedGeometry.geometryExpressID);
             
-            // Centrer la caméra sur le modèle
-            const box = new THREE.Box3().setFromObject(ifcModel);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z);
+            const verts = ifcApi.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
+            const indices = ifcApi.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
             
-            if (cameraRef.current) {
-              cameraRef.current.position.set(
-                center.x + maxDim,
-                center.y + maxDim,
-                center.z + maxDim
-              );
-              cameraRef.current.lookAt(center);
+            if (verts.length === 0 || indices.length === 0) continue;
+            
+            const bufferGeometry = new THREE.BufferGeometry();
+            
+            // Create position and normal attributes (every 6 floats: x,y,z, nx,ny,nz)
+            const posFloats = new Float32Array(verts.length / 2);
+            const normFloats = new Float32Array(verts.length / 2);
+            
+            for (let k = 0; k < verts.length; k += 6) {
+              posFloats[k / 2] = verts[k];
+              posFloats[k / 2 + 1] = verts[k + 1];
+              posFloats[k / 2 + 2] = verts[k + 2];
+              normFloats[k / 2] = verts[k + 3];
+              normFloats[k / 2 + 1] = verts[k + 4];
+              normFloats[k / 2 + 2] = verts[k + 5];
             }
             
-            setIsLoading(false);
-            setNotification("Modèle IFC chargé avec succès !");
-          },
-          (progress) => {
-            if (progress.total > 0) {
-              const percent = Math.round((progress.loaded / progress.total) * 100);
-              setNotification(`Chargement: ${percent}%`);
-            }
-          },
-          (error) => {
-            console.error('IFC Load Error:', error);
-            setIsLoading(false);
-            setNotification("Erreur lors du chargement IFC");
+            bufferGeometry.setAttribute("position", new THREE.BufferAttribute(posFloats, 3));
+            bufferGeometry.setAttribute("normal", new THREE.BufferAttribute(normFloats, 3));
+            bufferGeometry.setIndex(Array.from(indices));
+            
+            // Get color from placed geometry
+            const color = placedGeometry.color;
+            const material = new THREE.MeshLambertMaterial({
+              color: new THREE.Color(color.x, color.y, color.z),
+              transparent: color.w < 1,
+              opacity: color.w,
+              side: THREE.DoubleSide
+            });
+            
+            const mesh = new THREE.Mesh(bufferGeometry, material);
+            
+            // Apply transformation matrix
+            const matrix = new THREE.Matrix4();
+            matrix.fromArray(placedGeometry.flatTransformation);
+            mesh.applyMatrix4(matrix);
+            
+            mesh.userData.expressID = flatMesh.expressID;
+            ifcGroup.add(mesh);
+            meshCount++;
           }
-        );
-      } catch (error) {
-        console.error('IFC Load Exception:', error);
+        }
+        
+        ifcApi.CloseModel(modelID);
+        
+        scene.add(ifcGroup);
+        modelRef.current = ifcGroup;
+        
         setIsLoading(false);
-        setNotification("Erreur lors du chargement IFC");
+        setNotification(`Modèle IFC chargé ! (${meshCount} objets)`);
+        
+        // Center camera on model
+        const box = new THREE.Box3().setFromObject(ifcGroup);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        
+        if (cameraRef.current && controlsRef.current) {
+          cameraRef.current.position.set(
+            center.x + maxDim,
+            center.y + maxDim,
+            center.z + maxDim
+          );
+          controlsRef.current.target.copy(center);
+          controlsRef.current.update();
+        }
+      } catch (error) {
+        console.error('IFC Load Error:', error);
+        setIsLoading(false);
+        setNotification(`Erreur: ${error instanceof Error ? error.message : "Échec du chargement"}`);
+        // Re-add mock data on error
+        addMockData(scene);
       }
     };
 
     loadIFC();
-  }, [ifcFileUrl, setNotification]);
+  }, [ifcFileUrl, apiReady, setNotification, addMockData]);
 
   return (
     <div ref={mountRef} className="w-full h-full cursor-crosshair relative outline-none">
@@ -232,7 +312,7 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
           <div className="bg-slate-800 px-6 py-4 rounded-lg border border-slate-600">
             <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-            <p className="text-white text-sm">Chargement du modèle...</p>
+            <p className="text-white text-sm">{loadingMessage}</p>
           </div>
         </div>
       )}
