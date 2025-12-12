@@ -1,17 +1,18 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { ThreeViewer } from './components/ThreeViewer';
-import { FolderOpen, Info, ShieldCheck, UploadCloud, Play, FileSpreadsheet, CheckCircle, AlertTriangle } from 'lucide-react';
+import { ThreeViewer, SelectedElementInfo } from './components/ThreeViewer';
+import { FolderOpen, Info, ShieldCheck, UploadCloud, Play, FileSpreadsheet, CheckCircle, AlertTriangle, ChevronDown, ChevronRight, Box } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const App = () => {
   const [activePanel, setActivePanel] = useState('properties');
-  const [selection, setSelection] = useState<string | null>(null);
+  const [selectedElement, setSelectedElement] = useState<SelectedElementInfo | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [idsFile, setIdsFile] = useState<{name: string, ruleCount: number} | null>(null);
   const [ifcFileUrl, setIfcFileUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState("Projet_Demo.ifc");
   const [auditStats, setAuditStats] = useState<any>(null);
   const [auditDetails, setAuditDetails] = useState<any[] | null>(null);
+  const [expandedSets, setExpandedSets] = useState<Set<string>>(new Set(['Informations générales']));
 
   const idsInputRef = useRef<HTMLInputElement>(null);
   const ifcInputRef = useRef<HTMLInputElement>(null);
@@ -22,9 +23,28 @@ const App = () => {
     setTimeout(() => setNotification(null), 4000);
   }, []);
 
-  const handleSelection = useCallback((id: string | null) => {
-    setSelection(id);
+  const handleSelection = useCallback((info: SelectedElementInfo | null) => {
+    setSelectedElement(info);
+    if (info) {
+      // Auto-switch to properties panel when selecting
+      setActivePanel('properties');
+      // Expand all property sets by default
+      const allSets = new Set(info.propertySets.map(ps => ps.name));
+      setExpandedSets(allSets);
+    }
   }, []);
+
+  const togglePropertySet = (name: string) => {
+    setExpandedSets(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(name)) {
+        newSet.delete(name);
+      } else {
+        newSet.add(name);
+      }
+      return newSet;
+    });
+  };
 
   const handleIfcUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -32,6 +52,7 @@ const App = () => {
       setFileName(file.name);
       setIfcFileUrl(URL.createObjectURL(file));
       setAuditStats(null);
+      setSelectedElement(null);
     }
   };
 
@@ -63,6 +84,16 @@ const App = () => {
       setActivePanel('ids');
       showNotification("Audit terminé !");
     }, 1500);
+  };
+
+  const formatValue = (value: string | number | boolean | null): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Oui' : 'Non';
+    if (typeof value === 'number') {
+      if (Number.isInteger(value)) return value.toString();
+      return value.toFixed(3);
+    }
+    return String(value);
   };
 
   return (
@@ -98,7 +129,7 @@ const App = () => {
       <div className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col shadow-xl z-20">
         <div className="h-14 border-b border-slate-700 flex items-center px-4 gap-3 bg-slate-800">
             {activePanel === 'ids' ? <ShieldCheck className="text-blue-500" size={20} /> : <Info className="text-blue-500" size={20} />}
-            <span className="font-bold text-white tracking-wide">{activePanel === 'ids' ? 'Audit Manager' : 'Inspecteur'}</span>
+            <span className="font-bold text-white tracking-wide">{activePanel === 'ids' ? 'Audit Manager' : 'Propriétés IFC'}</span>
         </div>
         
         <div className="p-4 overflow-y-auto flex-1">
@@ -145,8 +176,59 @@ const App = () => {
                     )}
                 </div>
             ) : (
-                <div className="text-slate-300 text-sm p-4 text-center opacity-50">
-                    {selection ? `ID: ${selection}` : "Sélectionnez un élément 3D"}
+                /* PROPERTIES PANEL */
+                <div className="space-y-3">
+                    {selectedElement ? (
+                        <>
+                            {/* Header with element info */}
+                            <div className="bg-gradient-to-r from-green-600 to-green-500 p-3 rounded-lg shadow-lg">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <Box size={18} className="text-white" />
+                                    <span className="font-bold text-white text-sm">{selectedElement.name}</span>
+                                </div>
+                                <div className="text-green-100 text-xs">{selectedElement.type}</div>
+                                <div className="text-green-200 text-[10px] mt-1">ID: {selectedElement.expressID}</div>
+                            </div>
+
+                            {/* Property Sets */}
+                            {selectedElement.propertySets.map((pset, index) => (
+                                <div key={index} className="bg-slate-700/50 rounded-lg overflow-hidden border border-slate-600">
+                                    <button
+                                        onClick={() => togglePropertySet(pset.name)}
+                                        className="w-full px-3 py-2 flex items-center justify-between bg-slate-700 hover:bg-slate-600 transition-colors"
+                                    >
+                                        <span className="font-semibold text-sm text-slate-200">{pset.name}</span>
+                                        {expandedSets.has(pset.name) ? (
+                                            <ChevronDown size={16} className="text-slate-400" />
+                                        ) : (
+                                            <ChevronRight size={16} className="text-slate-400" />
+                                        )}
+                                    </button>
+                                    
+                                    {expandedSets.has(pset.name) && (
+                                        <div className="p-2 space-y-1">
+                                            {pset.properties.map((prop, propIndex) => (
+                                                <div key={propIndex} className="flex justify-between items-start py-1 px-2 hover:bg-slate-600/50 rounded text-xs">
+                                                    <span className="text-slate-400 flex-shrink-0 mr-2">{prop.name}</span>
+                                                    <span className="text-slate-200 text-right font-mono break-all">{formatValue(prop.value)}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+
+                            <div className="text-center text-xs text-slate-500 mt-4">
+                                {selectedElement.propertySets.reduce((acc, ps) => acc + ps.properties.length, 0)} propriétés trouvées
+                            </div>
+                        </>
+                    ) : (
+                        <div className="text-center py-12">
+                            <Box size={48} className="mx-auto text-slate-600 mb-4" />
+                            <p className="text-slate-400 text-sm">Cliquez sur un élément 3D</p>
+                            <p className="text-slate-500 text-xs mt-1">pour voir ses propriétés IFC</p>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
