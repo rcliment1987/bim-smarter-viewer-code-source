@@ -29,6 +29,19 @@ interface ThreeViewerProps {
 // Highlight color - VERT FLUO
 const HIGHLIGHT_COLOR = 0x39ff14;
 
+// IFC Type codes for property-related entities
+const IFCRELDEFINESBYPROPERTIES = 4186316022;
+const IFCPROPERTYSET = 1451395588;
+const IFCELEMENTQUANTITY = 1883228015;
+const IFCPROPERTYSINGLEVALUE = 3650150729;
+const IFCPROPERTYLISTVALUE = 2752243245;
+const IFCPROPERTYENUMERATEDVALUE = 4166981789;
+const IFCQUANTITYLENGTH = 931644368;
+const IFCQUANTITYAREA = 2044713172;
+const IFCQUANTITYVOLUME = 3377609919;
+const IFCQUANTITYCOUNT = 2093928680;
+const IFCQUANTITYWEIGHT = 825690147;
+
 export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, setNotification }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -41,12 +54,12 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
   const modelIDRef = useRef<number | null>(null);
   const selectedMeshRef = useRef<THREE.Mesh | null>(null);
   const originalMaterialRef = useRef<THREE.Material | null>(null);
+  const propertyRelsRef = useRef<Map<number, number[]>>(new Map());
   
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Chargement...");
   const [error, setError] = useState<string | null>(null);
 
-  // Store callbacks in refs to avoid re-triggering effects
   const onSelectRef = useRef(onSelect);
   const setNotificationRef = useRef(setNotification);
   useEffect(() => {
@@ -54,7 +67,91 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     setNotificationRef.current = setNotification;
   }, [onSelect, setNotification]);
 
-  // Function to get IFC properties for an element
+  // Helper to safely get a value from IFC
+  const getIfcValue = (obj: any): string | number | boolean | null => {
+    if (obj === null || obj === undefined) return null;
+    if (typeof obj === 'object') {
+      if (obj.value !== undefined) return obj.value;
+      if (obj.Value !== undefined) return obj.Value;
+      return null;
+    }
+    return obj;
+  };
+
+  // Extract property value based on type
+  const extractPropertyValue = useCallback((ifcApi: any, modelID: number, propRef: any): IFCProperty | null => {
+    try {
+      const propID = typeof propRef === 'object' ? propRef.value : propRef;
+      if (!propID) return null;
+      
+      const propLine = ifcApi.GetLine(modelID, propID);
+      if (!propLine) return null;
+      
+      const propName = getIfcValue(propLine.Name) || 'Unknown';
+      let propValue: string | number | boolean | null = null;
+
+      // IfcPropertySingleValue
+      if (propLine.NominalValue !== undefined) {
+        propValue = getIfcValue(propLine.NominalValue);
+      }
+      // IfcPropertyListValue
+      else if (propLine.ListValues !== undefined && Array.isArray(propLine.ListValues)) {
+        const values = propLine.ListValues.map((v: any) => getIfcValue(v)).filter((v: any) => v !== null);
+        propValue = values.join(', ');
+      }
+      // IfcPropertyEnumeratedValue
+      else if (propLine.EnumerationValues !== undefined && Array.isArray(propLine.EnumerationValues)) {
+        const values = propLine.EnumerationValues.map((v: any) => getIfcValue(v)).filter((v: any) => v !== null);
+        propValue = values.join(', ');
+      }
+
+      if (propName && propValue !== null) {
+        return { name: String(propName), value: propValue };
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }, []);
+
+  // Extract quantity value
+  const extractQuantityValue = useCallback((ifcApi: any, modelID: number, qtyRef: any): IFCProperty | null => {
+    try {
+      const qtyID = typeof qtyRef === 'object' ? qtyRef.value : qtyRef;
+      if (!qtyID) return null;
+      
+      const qtyLine = ifcApi.GetLine(modelID, qtyID);
+      if (!qtyLine) return null;
+      
+      const qtyName = getIfcValue(qtyLine.Name) || 'Unknown';
+      let qtyValue: string | null = null;
+
+      if (qtyLine.LengthValue !== undefined) {
+        const val = getIfcValue(qtyLine.LengthValue);
+        qtyValue = val !== null ? `${Number(val).toFixed(3)} m` : null;
+      } else if (qtyLine.AreaValue !== undefined) {
+        const val = getIfcValue(qtyLine.AreaValue);
+        qtyValue = val !== null ? `${Number(val).toFixed(3)} m²` : null;
+      } else if (qtyLine.VolumeValue !== undefined) {
+        const val = getIfcValue(qtyLine.VolumeValue);
+        qtyValue = val !== null ? `${Number(val).toFixed(3)} m³` : null;
+      } else if (qtyLine.CountValue !== undefined) {
+        qtyValue = String(getIfcValue(qtyLine.CountValue));
+      } else if (qtyLine.WeightValue !== undefined) {
+        const val = getIfcValue(qtyLine.WeightValue);
+        qtyValue = val !== null ? `${Number(val).toFixed(3)} kg` : null;
+      }
+
+      if (qtyName && qtyValue !== null) {
+        return { name: String(qtyName), value: qtyValue };
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }, []);
+
+  // Get all PropertySets for an element
   const getElementProperties = useCallback(async (expressID: number): Promise<SelectedElementInfo | null> => {
     const ifcApi = ifcApiRef.current;
     const modelID = modelIDRef.current;
@@ -62,136 +159,165 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     if (!ifcApi || modelID === null) return null;
 
     try {
-      // Get the element line (basic info)
       const element = ifcApi.GetLine(modelID, expressID);
-      const elementType = ifcApi.GetNameFromTypeCode(element.type) || 'Unknown';
-      
-      // Get element name
-      let elementName = 'Sans nom';
-      if (element.Name?.value) {
-        elementName = element.Name.value;
-      } else if (element.LongName?.value) {
-        elementName = element.LongName.value;
+      if (!element) {
+        return {
+          expressID,
+          type: 'Unknown',
+          name: 'Element',
+          propertySets: [{ name: 'Informations', properties: [{ name: 'Express ID', value: expressID }] }]
+        };
       }
+
+      const elementType = ifcApi.GetNameFromTypeCode(element.type) || 'Unknown';
+      let elementName = getIfcValue(element.Name) || getIfcValue(element.LongName) || 'Sans nom';
 
       const propertySets: IFCPropertySet[] = [];
 
-      // Basic properties
+      // 1. Basic Properties
       const basicProps: IFCProperty[] = [
         { name: 'Express ID', value: expressID },
         { name: 'Type IFC', value: elementType },
-        { name: 'GlobalId', value: element.GlobalId?.value || 'N/A' },
       ];
       
-      if (element.Description?.value) {
-        basicProps.push({ name: 'Description', value: element.Description.value });
-      }
-      if (element.ObjectType?.value) {
-        basicProps.push({ name: 'Object Type', value: element.ObjectType.value });
-      }
-      if (element.Tag?.value) {
-        basicProps.push({ name: 'Tag', value: element.Tag.value });
-      }
+      const globalId = getIfcValue(element.GlobalId);
+      if (globalId) basicProps.push({ name: 'GlobalId', value: globalId });
+      
+      const description = getIfcValue(element.Description);
+      if (description) basicProps.push({ name: 'Description', value: description });
+      
+      const objectType = getIfcValue(element.ObjectType);
+      if (objectType) basicProps.push({ name: 'ObjectType', value: objectType });
+      
+      const tag = getIfcValue(element.Tag);
+      if (tag) basicProps.push({ name: 'Tag', value: tag });
 
       propertySets.push({ name: 'Informations générales', properties: basicProps });
 
-      // Try to get property sets (IsDefinedBy relationship)
+      // 2. Get PropertySets via cached relations
+      const relIDs = propertyRelsRef.current.get(expressID) || [];
+      
+      for (const relID of relIDs) {
+        try {
+          const rel = ifcApi.GetLine(modelID, relID);
+          if (!rel || !rel.RelatingPropertyDefinition) continue;
+
+          const propDefRef = rel.RelatingPropertyDefinition;
+          const propDefID = typeof propDefRef === 'object' ? propDefRef.value : propDefRef;
+          if (!propDefID) continue;
+
+          const propDef = ifcApi.GetLine(modelID, propDefID);
+          if (!propDef) continue;
+
+          const psetName = getIfcValue(propDef.Name) || 'PropertySet';
+          const properties: IFCProperty[] = [];
+
+          // IfcPropertySet - HasProperties
+          if (propDef.HasProperties && Array.isArray(propDef.HasProperties)) {
+            for (const propRef of propDef.HasProperties) {
+              const prop = extractPropertyValue(ifcApi, modelID, propRef);
+              if (prop) properties.push(prop);
+            }
+          }
+          // IfcElementQuantity - Quantities
+          else if (propDef.Quantities && Array.isArray(propDef.Quantities)) {
+            for (const qtyRef of propDef.Quantities) {
+              const qty = extractQuantityValue(ifcApi, modelID, qtyRef);
+              if (qty) properties.push(qty);
+            }
+          }
+
+          if (properties.length > 0) {
+            propertySets.push({ name: String(psetName), properties });
+          }
+        } catch (e) {
+          // Skip invalid relations
+        }
+      }
+
+      // 3. Try to get Type properties (from IfcTypeObject)
       try {
-        const propSets = ifcApi.GetPropertySets(modelID, expressID);
-        
-        if (propSets && propSets.length > 0) {
-          for (const psetInfo of propSets) {
-            const psetLine = ifcApi.GetLine(modelID, psetInfo.expressID);
-            const psetName = psetLine?.Name?.value || 'PropertySet';
-            const properties: IFCProperty[] = [];
+        if (element.IsTypedBy && Array.isArray(element.IsTypedBy)) {
+          for (const typeRef of element.IsTypedBy) {
+            const typeRelID = typeof typeRef === 'object' ? typeRef.value : typeRef;
+            const typeRel = ifcApi.GetLine(modelID, typeRelID);
+            if (typeRel?.RelatingType) {
+              const typeID = typeof typeRel.RelatingType === 'object' ? typeRel.RelatingType.value : typeRel.RelatingType;
+              const typeObj = ifcApi.GetLine(modelID, typeID);
+              
+              if (typeObj?.HasPropertySets && Array.isArray(typeObj.HasPropertySets)) {
+                for (const psetRef of typeObj.HasPropertySets) {
+                  const psetID = typeof psetRef === 'object' ? psetRef.value : psetRef;
+                  const pset = ifcApi.GetLine(modelID, psetID);
+                  if (!pset) continue;
 
-            if (psetLine?.HasProperties) {
-              for (const propRef of psetLine.HasProperties) {
-                try {
-                  const propLine = ifcApi.GetLine(modelID, propRef.value);
-                  const propName = propLine?.Name?.value || 'Property';
-                  let propValue: string | number | boolean | null = null;
+                  const psetName = getIfcValue(pset.Name) || 'Type Properties';
+                  const properties: IFCProperty[] = [];
 
-                  if (propLine?.NominalValue?.value !== undefined) {
-                    propValue = propLine.NominalValue.value;
-                  } else if (propLine?.Value?.value !== undefined) {
-                    propValue = propLine.Value.value;
+                  if (pset.HasProperties && Array.isArray(pset.HasProperties)) {
+                    for (const propRef of pset.HasProperties) {
+                      const prop = extractPropertyValue(ifcApi, modelID, propRef);
+                      if (prop) properties.push(prop);
+                    }
                   }
 
-                  properties.push({ name: propName, value: propValue });
-                } catch (e) {
-                  // Skip invalid properties
+                  if (properties.length > 0) {
+                    propertySets.push({ name: `[Type] ${psetName}`, properties });
+                  }
                 }
               }
-            }
-
-            if (properties.length > 0) {
-              propertySets.push({ name: psetName, properties });
             }
           }
         }
       } catch (e) {
-        // PropertySets not available, continue with basic info
+        // Type properties not available
       }
 
-      // Try to get quantities
+      // 4. Try to get Material associations
       try {
-        const quantities = ifcApi.GetQuantitySets(modelID, expressID);
-        
-        if (quantities && quantities.length > 0) {
-          for (const qsetInfo of quantities) {
-            const qsetLine = ifcApi.GetLine(modelID, qsetInfo.expressID);
-            const qsetName = qsetLine?.Name?.value || 'Quantities';
-            const properties: IFCProperty[] = [];
-
-            if (qsetLine?.Quantities) {
-              for (const qRef of qsetLine.Quantities) {
-                try {
-                  const qLine = ifcApi.GetLine(modelID, qRef.value);
-                  const qName = qLine?.Name?.value || 'Quantity';
-                  let qValue: string | number | null = null;
-
-                  // Different quantity types
-                  if (qLine?.LengthValue?.value !== undefined) {
-                    qValue = `${qLine.LengthValue.value.toFixed(3)} m`;
-                  } else if (qLine?.AreaValue?.value !== undefined) {
-                    qValue = `${qLine.AreaValue.value.toFixed(3)} m²`;
-                  } else if (qLine?.VolumeValue?.value !== undefined) {
-                    qValue = `${qLine.VolumeValue.value.toFixed(3)} m³`;
-                  } else if (qLine?.CountValue?.value !== undefined) {
-                    qValue = qLine.CountValue.value;
-                  } else if (qLine?.WeightValue?.value !== undefined) {
-                    qValue = `${qLine.WeightValue.value.toFixed(3)} kg`;
-                  }
-
-                  if (qValue !== null) {
-                    properties.push({ name: qName, value: qValue });
-                  }
-                } catch (e) {
-                  // Skip invalid quantities
-                }
-              }
-            }
-
-            if (properties.length > 0) {
-              propertySets.push({ name: qsetName, properties });
-            }
-          }
-        }
-      } catch (e) {
-        // QuantitySets not available
-      }
-
-      // Try to get material info
-      try {
-        const materials = ifcApi.GetMaterialsProperties(modelID, expressID);
-        if (materials && materials.length > 0) {
+        if (element.HasAssociations && Array.isArray(element.HasAssociations)) {
           const matProps: IFCProperty[] = [];
-          for (const mat of materials) {
-            if (mat.Name?.value) {
-              matProps.push({ name: 'Matériau', value: mat.Name.value });
+          
+          for (const assocRef of element.HasAssociations) {
+            const assocID = typeof assocRef === 'object' ? assocRef.value : assocRef;
+            const assoc = ifcApi.GetLine(modelID, assocID);
+            
+            if (assoc?.RelatingMaterial) {
+              const matID = typeof assoc.RelatingMaterial === 'object' ? assoc.RelatingMaterial.value : assoc.RelatingMaterial;
+              const material = ifcApi.GetLine(modelID, matID);
+              
+              if (material) {
+                const matName = getIfcValue(material.Name);
+                if (matName) {
+                  matProps.push({ name: 'Matériau', value: matName });
+                }
+                
+                // For layered materials
+                if (material.MaterialLayers && Array.isArray(material.MaterialLayers)) {
+                  for (let i = 0; i < material.MaterialLayers.length; i++) {
+                    const layerRef = material.MaterialLayers[i];
+                    const layerID = typeof layerRef === 'object' ? layerRef.value : layerRef;
+                    const layer = ifcApi.GetLine(modelID, layerID);
+                    if (layer) {
+                      const thickness = getIfcValue(layer.LayerThickness);
+                      if (layer.Material) {
+                        const layerMatID = typeof layer.Material === 'object' ? layer.Material.value : layer.Material;
+                        const layerMat = ifcApi.GetLine(modelID, layerMatID);
+                        const layerMatName = getIfcValue(layerMat?.Name);
+                        if (layerMatName) {
+                          matProps.push({ 
+                            name: `Couche ${i + 1}`, 
+                            value: thickness ? `${layerMatName} (${Number(thickness).toFixed(3)} m)` : layerMatName 
+                          });
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
+          
           if (matProps.length > 0) {
             propertySets.push({ name: 'Matériaux', properties: matProps });
           }
@@ -203,7 +329,7 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
       return {
         expressID,
         type: elementType,
-        name: elementName,
+        name: String(elementName),
         propertySets
       };
     } catch (e) {
@@ -212,31 +338,24 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         expressID,
         type: 'Unknown',
         name: 'Element',
-        propertySets: [{ 
-          name: 'Informations générales', 
-          properties: [{ name: 'Express ID', value: expressID }] 
-        }]
+        propertySets: [{ name: 'Informations', properties: [{ name: 'Express ID', value: expressID }] }]
       };
     }
-  }, []);
+  }, [extractPropertyValue, extractQuantityValue]);
 
-  // Function to highlight/unhighlight mesh
+  // Highlight mesh
   const highlightMesh = useCallback((mesh: THREE.Mesh | null) => {
-    // Restore previous selection
     if (selectedMeshRef.current && originalMaterialRef.current) {
       selectedMeshRef.current.material = originalMaterialRef.current;
     }
 
-    // Clear refs
     selectedMeshRef.current = null;
     originalMaterialRef.current = null;
 
-    // Highlight new selection
     if (mesh && mesh.material) {
       originalMaterialRef.current = mesh.material as THREE.Material;
       selectedMeshRef.current = mesh;
       
-      // Create highlight material
       const highlightMaterial = new THREE.MeshLambertMaterial({
         color: HIGHLIGHT_COLOR,
         emissive: HIGHLIGHT_COLOR,
@@ -250,7 +369,7 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     }
   }, []);
 
-  // Add mock data function
+  // Add mock data
   const addMockData = useCallback((scene: THREE.Scene) => {
     try {
       const group = new THREE.Group();
@@ -260,21 +379,21 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
       const m1 = new THREE.Mesh(box, mat); 
       m1.position.set(0, 2, -5); 
       m1.scale.set(10, 4, 0.5); 
-      m1.userData = { id: "MOCK1", isMock: true, originalColor: 0x94a3b8 };
+      m1.userData = { id: "MOCK1", isMock: true };
       const m2 = new THREE.Mesh(box, new THREE.MeshLambertMaterial({ color: 0x475569 })); 
       m2.position.set(0, 0, 0); 
       m2.scale.set(12, 0.5, 12); 
-      m2.userData = { id: "MOCK2", isMock: true, originalColor: 0x475569 };
+      m2.userData = { id: "MOCK2", isMock: true };
       group.add(m1, m2);
       scene.add(group);
       mockGroupRef.current = group;
       return group;
     } catch (e) {
-      console.error('Mock data error:', e);
       return null;
     }
   }, []);
 
+  // Setup scene
   useEffect(() => {
     if (!mountRef.current) return;
     
@@ -282,48 +401,38 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
       const width = mountRef.current.clientWidth;
       const height = mountRef.current.clientHeight;
 
-      // SCENE
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0xf1f5f9);
       sceneRef.current = scene;
 
-      // CAMERA
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
       camera.position.set(20, 20, 20);
       cameraRef.current = camera;
 
-      // RENDERER
       const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(width, height);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       const existingCanvas = mountRef.current.querySelector('canvas');
-      if (existingCanvas) {
-        existingCanvas.remove();
-      }
+      if (existingCanvas) existingCanvas.remove();
       mountRef.current.appendChild(renderer.domElement);
       rendererRef.current = renderer;
 
-      // CONTROLS
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
       controlsRef.current = controls;
 
-      // LIGHTS
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
       scene.add(ambientLight);
       const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
       dirLight.position.set(10, 20, 10);
       scene.add(dirLight);
 
-      // GRID
       const gridHelper = new THREE.GridHelper(50, 50, 0x888888, 0xcccccc);
       scene.add(gridHelper);
 
-      // Add mock data if no IFC file
       addMockData(scene);
 
-      // RAYCASTER for selection
       const raycaster = new THREE.Raycaster();
       const mouse = new THREE.Vector2();
 
@@ -336,31 +445,26 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
           raycaster.setFromCamera(mouse, camera);
           
           const objectsToTest: THREE.Object3D[] = [];
-          if (modelRef.current) {
-            objectsToTest.push(modelRef.current);
-          }
-          if (mockGroupRef.current) {
-            mockGroupRef.current.children.forEach(child => objectsToTest.push(child));
-          }
+          if (modelRef.current) objectsToTest.push(modelRef.current);
+          if (mockGroupRef.current) mockGroupRef.current.children.forEach(child => objectsToTest.push(child));
 
           const intersects = raycaster.intersectObjects(objectsToTest, true);
 
           if (intersects.length > 0) {
             const hit = intersects[0];
             const mesh = hit.object as THREE.Mesh;
-            
-            // Highlight the mesh
             highlightMesh(mesh);
             
             if (mesh.userData?.expressID !== undefined) {
               const expressID = mesh.userData.expressID;
-              setNotificationRef.current(`Élément sélectionné : ID ${expressID}`);
-              
-              // Get IFC properties
+              setNotificationRef.current(`Chargement des propriétés...`);
               const elementInfo = await getElementProperties(expressID);
               onSelectRef.current(elementInfo);
+              if (elementInfo) {
+                const propCount = elementInfo.propertySets.reduce((acc, ps) => acc + ps.properties.length, 0);
+                setNotificationRef.current(`${elementInfo.type} sélectionné - ${propCount} propriétés`);
+              }
             } else if (mesh.userData?.id) {
-              // Mock object
               setNotificationRef.current(`Élément sélectionné : ${mesh.userData.id}`);
               onSelectRef.current({
                 expressID: 0,
@@ -376,7 +480,6 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
               });
             }
           } else {
-            // Deselect
             highlightMesh(null);
             onSelectRef.current(null);
           }
@@ -385,10 +488,8 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         }
       };
       
-      // Use single click instead of double click for better UX
       renderer.domElement.addEventListener('click', onMouseClick);
 
-      // ANIMATION
       let animationId: number;
       const animate = () => {
         animationId = requestAnimationFrame(animate);
@@ -422,7 +523,7 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
     }
   }, [addMockData, highlightMesh, getElementProperties]);
 
-  // LOAD IFC FILE EFFECT
+  // Load IFC
   useEffect(() => {
     if (!ifcFileUrl || !sceneRef.current) return;
 
@@ -434,29 +535,22 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
       setLoadingMessage("Téléchargement du fichier IFC...");
       setNotificationRef.current("Chargement du fichier IFC...");
 
-      // Clear selection
       highlightMesh(null);
       onSelectRef.current(null);
+      propertyRelsRef.current.clear();
 
-      // Remove mock data
       if (mockGroupRef.current) {
         scene.remove(mockGroupRef.current);
         mockGroupRef.current = null;
       }
 
-      // Remove previous model
       if (modelRef.current) {
         scene.remove(modelRef.current);
         modelRef.current = null;
       }
 
-      // Close previous model if exists
       if (ifcApiRef.current && modelIDRef.current !== null) {
-        try {
-          ifcApiRef.current.CloseModel(modelIDRef.current);
-        } catch (e) {
-          // Ignore
-        }
+        try { ifcApiRef.current.CloseModel(modelIDRef.current); } catch (e) {}
       }
 
       try {
@@ -468,8 +562,6 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         
         setLoadingMessage("Initialisation du moteur...");
         await ifcApi.Init();
-        
-        // Store API reference for property queries
         ifcApiRef.current = ifcApi;
         
         setLoadingMessage("Téléchargement du fichier...");
@@ -481,15 +573,37 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         const uint8Array = new Uint8Array(data);
         
         setLoadingMessage("Parsing du fichier IFC...");
-        
         const modelID = ifcApi.OpenModel(uint8Array);
         modelIDRef.current = modelID;
+        
+        // Index all IfcRelDefinesByProperties for faster property lookup
+        setLoadingMessage("Indexation des propriétés...");
+        try {
+          const relDefines = ifcApi.GetLineIDsWithType(modelID, IFCRELDEFINESBYPROPERTIES);
+          for (let i = 0; i < relDefines.size(); i++) {
+            const relID = relDefines.get(i);
+            try {
+              const rel = ifcApi.GetLine(modelID, relID);
+              if (rel?.RelatedObjects && Array.isArray(rel.RelatedObjects)) {
+                for (const objRef of rel.RelatedObjects) {
+                  const objID = typeof objRef === 'object' ? objRef.value : objRef;
+                  if (objID) {
+                    const existing = propertyRelsRef.current.get(objID) || [];
+                    existing.push(relID);
+                    propertyRelsRef.current.set(objID, existing);
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+        } catch (e) {
+          console.warn('Could not index properties:', e);
+        }
         
         const ifcGroup = new THREE.Group();
         ifcGroup.name = "IFCModel";
         
         setLoadingMessage("Génération de la géométrie 3D...");
-        
         const flatMeshes = ifcApi.LoadAllGeometry(modelID);
         let meshCount = 0;
         
@@ -507,7 +621,6 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
             if (verts.length === 0 || indices.length === 0) continue;
             
             const bufferGeometry = new THREE.BufferGeometry();
-            
             const posFloats = new Float32Array(verts.length / 2);
             const normFloats = new Float32Array(verts.length / 2);
             
@@ -533,7 +646,6 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
             });
             
             const mesh = new THREE.Mesh(bufferGeometry, material);
-            
             const matrix = new THREE.Matrix4();
             matrix.fromArray(placedGeometry.flatTransformation);
             mesh.applyMatrix4(matrix);
@@ -544,27 +656,20 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
           }
         }
         
-        // DON'T close the model - we need it for property queries!
-        // ifcApi.CloseModel(modelID);
-        
         scene.add(ifcGroup);
         modelRef.current = ifcGroup;
         
         setIsLoading(false);
-        setNotificationRef.current(`Modèle IFC chargé ! (${meshCount} objets) - Cliquez sur un élément pour voir ses propriétés`);
+        const psetCount = propertyRelsRef.current.size;
+        setNotificationRef.current(`Modèle chargé ! ${meshCount} objets, ${psetCount} éléments avec propriétés`);
         
-        // Center camera on model
         const box = new THREE.Box3().setFromObject(ifcGroup);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
         
         if (cameraRef.current && controlsRef.current) {
-          cameraRef.current.position.set(
-            center.x + maxDim,
-            center.y + maxDim,
-            center.z + maxDim
-          );
+          cameraRef.current.position.set(center.x + maxDim, center.y + maxDim, center.z + maxDim);
           controlsRef.current.target.copy(center);
           controlsRef.current.update();
         }
@@ -595,12 +700,7 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         <div className="absolute top-4 left-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg z-20">
           <p className="font-bold">Erreur</p>
           <p className="text-sm">{error}</p>
-          <button 
-            onClick={() => setError(null)} 
-            className="mt-2 bg-white text-red-600 px-3 py-1 rounded text-sm"
-          >
-            Fermer
-          </button>
+          <button onClick={() => setError(null)} className="mt-2 bg-white text-red-600 px-3 py-1 rounded text-sm">Fermer</button>
         </div>
       )}
     </div>
