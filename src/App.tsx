@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { ThreeViewer } from './components/ThreeViewer';
 import { FolderOpen, Info, ShieldCheck, UploadCloud, Play, FileSpreadsheet, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,16 @@ const App = () => {
 
   const idsInputRef = useRef<HTMLInputElement>(null);
   const ifcInputRef = useRef<HTMLInputElement>(null);
+
+  // Memoize to prevent ThreeViewer re-renders
+  const showNotification = useCallback((msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 4000);
+  }, []);
+
+  const handleSelection = useCallback((id: string | null) => {
+    setSelection(id);
+  }, []);
 
   const handleIfcUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -55,11 +65,6 @@ const App = () => {
     }, 1500);
   };
 
-  const showNotification = (msg: string) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
-  };
-
   return (
     <div className="flex h-screen w-screen bg-slate-900 text-slate-100 overflow-hidden font-sans">
       <input type="file" ref={idsInputRef} onChange={handleIdsUpload} accept=".ids,.xml" className="hidden" />
@@ -86,7 +91,7 @@ const App = () => {
              </div>
              <div className="flex items-center text-slate-300 gap-2"><FileSpreadsheet size={16}/> Export Data</div>
         </div>
-        <ThreeViewer ifcFileUrl={ifcFileUrl} onSelect={setSelection} setNotification={showNotification} />
+        <ThreeViewer ifcFileUrl={ifcFileUrl} onSelect={handleSelection} setNotification={showNotification} />
       </div>
 
       {/* SIDEBAR DROITE */}
