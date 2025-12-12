@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { setIfcApiForAudit } from '../App';
 
 // IFC Property types
 export interface IFCProperty {
@@ -658,6 +659,9 @@ export const ThreeViewer: React.FC<ThreeViewerProps> = ({ ifcFileUrl, onSelect, 
         
         scene.add(ifcGroup);
         modelRef.current = ifcGroup;
+        
+        // Make IFC API available for audit
+        setIfcApiForAudit(ifcApi, modelID);
         
         setIsLoading(false);
         const psetCount = propertyRelsRef.current.size;
